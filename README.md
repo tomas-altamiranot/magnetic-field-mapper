@@ -27,7 +27,8 @@ and needs only two axes of motion:
 2. At each of the 72 angular stops, the ESP32 samples the Hall sensor and streams
    `angle,radius,field` over serial at 115200 baud.
 3. A second stepper drives a **rack and pinion** that moves the sensor 2 mm further out.
-4. Repeat until 34 mm, then the carriage returns to origin on its own and waits for the next run.
+4. Repeat until 34 mm, then the firmware prints `FIN` and halts. The carriage is returned to
+   the center manually and the board reset before the next run.
 
 On the PC side, a Python script reads the serial stream live, converts polar coordinates to
 Cartesian, and renders an interpolated contour map with `matplotlib.tri` — no gridding or
@@ -40,13 +41,19 @@ from a measured zero point, not the raw reading:
 
 ```
 voltage      = (adc_reading / 4095) * 3.3
-voltage_zero = (1968        / 4095) * 3.3        // calibrated with no magnet present
+voltage_zero = (1936        / 4095) * 3.3        // calibrated with no magnet present
 gauss        = (voltage - voltage_zero) / 0.00165 // V per Gauss at 3.3 V
 millitesla   = gauss / 10
 ```
 
-`VALOR_ZERO = 1968` is a calibration constant specific to this sensor and supply. It has to
-be re-measured if you rebuild this — an incorrect zero shifts the entire field map.
+`VALOR_ZERO = 1936` is a calibration constant specific to this sensor and supply. It has to
+be re-measured if you rebuild this — an incorrect zero shifts the entire field map by a
+constant offset without changing its shape.
+
+Because both the averaged reading and the zero are integers, every possible output is a
+multiple of `(3.3 / 4095) / 0.00165 / 10 = 0.04884 mT` — the instrument's effective
+resolution. All 1,296 readings in `data/` fall exactly on that lattice, which is a useful
+sanity check that the sensor chain is behaving.
 
 ---
 
@@ -71,11 +78,15 @@ Set `PUERTO_SERIAL` in the script to your ESP32's port. The script opens a promp
 
 | Key | Action |
 |-----|--------|
-| `a` / `d` | nudge the carriage to center the sensor before starting |
+| `a` / `d` | nudge the carriage outward / back toward center before starting |
 | `s` | begin the scan |
 
 The heatmap appears when the scan finishes, and raw readings are written to
 `datos_campo_magnetico.csv`.
+
+Centering matters: the sensor should start directly over the magnet's axis, because every
+radius in the dataset is measured relative to wherever the carriage happened to begin. An
+off-center start is what produced the skewed maps in the scan history below.
 
 ---
 
@@ -110,6 +121,24 @@ A fourth issue was mechanical: the field map came out visibly tilted because the
 wasn't level. No amount of signal processing fixes that — it needed a shim.
 
 ---
+
+### Reproducing the numbers
+
+The dataset in `data/` is the raw output of the final run, so the firmware constants can be
+checked against it directly:
+
+```bash
+python - <<'EOF'
+import csv
+mt = [float(r['Campo_mT']) for r in csv.DictReader(open('data/datos_campo_magnetico.csv'))]
+step = (3.3/4095)/0.00165/10                       # mT per ADC count
+assert all(abs(round(round(v/step)*step, 2) - v) < 1e-9 for v in mt)
+print(f"{len(mt)} readings, all on the {step:.5f} mT lattice")
+EOF
+```
+
+All 1,296 readings land exactly on the lattice implied by the firmware's calibration
+constants — confirming the sensor conversion chain end to end.
 
 ## Hardware
 
@@ -151,6 +180,11 @@ A 100 µF electrolytic capacitor across the supply prevents brownout resets whil
   accumulating a small angular error over a full rotation.
 - **Fixed scan geometry.** Radius and step size are compile-time constants, so changing the
   scan area means reflashing.
+- **No automatic homing.** The firmware halts after `FIN`; the carriage has to be walked back
+  to center and the board reset before another run. Straightforward to add, but it wasn't
+  needed for the number of scans this project involved.
+- **Manual centering.** There is no limit switch or reference mark, so the origin is set by eye
+  with the `a`/`d` keys. This is the largest source of run-to-run variation.
 
 ---
 

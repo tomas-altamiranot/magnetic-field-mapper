@@ -12,7 +12,8 @@
  * Protocolo serial (115200 baud):
  *   'a' / 'd'  -> ajuste manual del carro antes de arrancar (centrado)
  *   'S'        -> inicia el barrido
- *   "FIN"      -> emitido al terminar; el carro vuelve al origen solo
+ *   "FIN"      -> emitido al terminar; el firmware queda detenido y hay que
+ *                 recentrar el carro y resetear la placa para otra corrida
  */
 
 #include <Stepper.h>
